@@ -1,0 +1,16 @@
+[Unit]
+Description=Grok Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bot
+Group=bot
+WorkingDirectory=/home/bot/x-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/bot/x-bot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

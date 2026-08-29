@@ -1,0 +1,1 @@
+bot ALL=(root) NOPASSWD: /usr/bin/systemctl restart grok-bot.service, /usr/bin/systemctl status grok-bot.service, /usr/bin/systemctl is-active grok-bot.service
