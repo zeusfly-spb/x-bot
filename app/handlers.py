@@ -9,7 +9,7 @@ from app.rate_limit import UserGuard
 from app.telegram_stream import stream_to_message
 
 START_TEXT = (
-    "Привет. Это Джамбек-Джамбалек, бот Grok (xAI).\n\n"
+    "Привет. Это Портальный бот Grok (xAI).\n\n"
     "Просто напишите сообщение — ответ появится по мере генерации.\n\n"
     "Команды:\n"
     "/start — это сообщение\n"
