@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,25 @@ def _int(name: str, default: int) -> int:
     return default if raw is None or raw == "" else int(raw)
 
 
+def _decimal(name: str, default: str) -> Decimal:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return Decimal(default)
+    return Decimal(raw.strip())
+
+
+def _flag(name: str, default: str = "0") -> bool:
+    raw = (os.getenv(name, default) or default).strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _id_set(name: str) -> frozenset[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(int(part.strip()) for part in raw.split(",") if part.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -31,6 +51,18 @@ class Settings:
     user_cooldown_seconds: float
     max_concurrent_per_user: int
     request_timeout_seconds: float
+    database_path: str
+    credits_per_usd: int
+    price_input_per_million_usd: Decimal
+    price_output_per_million_usd: Decimal
+    commission_percent: Decimal
+    commission_flat_usd: Decimal
+    min_charge_credits: int
+    fallback_charge_credits: int
+    min_balance_to_talk: int
+    welcome_credits: int
+    show_charge_notice: bool
+    admin_telegram_ids: frozenset[int]
 
 
 def load_settings() -> Settings:
@@ -41,7 +73,7 @@ def load_settings() -> Settings:
         xai_base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1").strip(),
         system_prompt=os.getenv(
             "SYSTEM_PROMPT",
-            "You are Grok, a helpful and maximally truthful AI built by xAI. "
+            "You are Grok Portal, a helpful and maximally truthful AI built by xAI powered by Portal"
             "Answer in the user's language.",
         ).strip(),
         history_limit=max(2, _int("HISTORY_LIMIT", 20)),
@@ -50,4 +82,16 @@ def load_settings() -> Settings:
         user_cooldown_seconds=float(os.getenv("USER_COOLDOWN_SECONDS", "2")),
         max_concurrent_per_user=max(1, _int("MAX_CONCURRENT_PER_USER", 1)),
         request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "180")),
+        database_path=os.getenv("DATABASE_PATH", "data/bot.db").strip() or "data/bot.db",
+        credits_per_usd=max(1, _int("CREDITS_PER_USD", 10000)),
+        price_input_per_million_usd=_decimal("PRICE_INPUT_PER_MILLION_USD", "2.00"),
+        price_output_per_million_usd=_decimal("PRICE_OUTPUT_PER_MILLION_USD", "6.00"),
+        commission_percent=_decimal("COMMISSION_PERCENT", "30"),
+        commission_flat_usd=_decimal("COMMISSION_FLAT_USD", "0"),
+        min_charge_credits=max(0, _int("MIN_CHARGE_CREDITS", 1)),
+        fallback_charge_credits=max(0, _int("FALLBACK_CHARGE_CREDITS", 10)),
+        min_balance_to_talk=max(0, _int("MIN_BALANCE_TO_TALK", 1)),
+        welcome_credits=max(0, _int("WELCOME_CREDITS", 0)),
+        show_charge_notice=_flag("SHOW_CHARGE_NOTICE", "0"),
+        admin_telegram_ids=_id_set("ADMIN_TELEGRAM_IDS"),
     )
