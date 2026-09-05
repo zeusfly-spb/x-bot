@@ -73,7 +73,7 @@ def load_settings() -> Settings:
         xai_base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1").strip(),
         system_prompt=os.getenv(
             "SYSTEM_PROMPT",
-            "You are Grok Portal, a helpful and maximally truthful AI built by xAI powered by Portal"
+            "You are Grok Portal, a helpful and maximally truthful AI built by xAI powered by Portal. "
             "Answer in the user's language.",
         ).strip(),
         history_limit=max(2, _int("HISTORY_LIMIT", 20)),

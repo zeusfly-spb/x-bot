@@ -10,6 +10,17 @@ from telegram.ext import ContextTypes
 from app.billing import calculate_charge, fallback_charge
 from app.config import Settings
 from app.grok_client import GrokClient
+from app.keyboards import (
+    BTN_BALANCE,
+    BTN_NEW_CHAT,
+    BTN_PACKAGES,
+    CB_CLOSE,
+    CB_TOPUP,
+    CB_USAGE,
+    REPLY_BUTTON_LABELS,
+    account_inline_keyboard,
+    main_reply_keyboard,
+)
 from app.memory import ConversationMemory
 from app.models import Charge, Usage
 from app.rate_limit import UserGuard
@@ -20,15 +31,9 @@ logger = logging.getLogger(__name__)
 
 START_TEXT = (
     "Привет. Это Бот Портал Grok (xAI).\n\n"
-    "Просто напишите сообщение — ответ появится по мере генерации.\n\n"
-    "Команды:\n"
-    "/start — это сообщение\n"
-    "/help — кратко как пользоваться\n"
-    "/reset — очистить контекст модели (логи сохраняются)\n"
-    "/model — какая модель сейчас используется\n"
-    "/balance — баланс кредитов\n"
-    "/usage — последние запросы к модели"
+    "Напишите сообщение — ответ появится по мере генерации."
 )
+TOPUP_SOON_TEXT = "Пополнение скоро"
 
 HELP_TEXT = (
     "Отправьте текст. Бот держит короткий контекст последних реплик "
@@ -39,6 +44,9 @@ HELP_TEXT = (
 )
 
 INSUFFICIENT_FUNDS = "Недостаточно кредитов"
+
+# Оценка одного короткого ответа для карточки счёта (не влияет на списание).
+_SHORT_ANSWER_USAGE = Usage(prompt_tokens=250, completion_tokens=80)
 
 
 class BotHandlers:
@@ -66,15 +74,62 @@ class BotHandlers:
             user.first_name,
         )
 
+    def _short_answer_cost(self) -> int:
+        return max(1, calculate_charge(_SHORT_ANSWER_USAGE, self.settings).credits_charged)
+
+    def _short_answers_left(self, credits: int) -> int:
+        return max(0, credits) // self._short_answer_cost()
+
+    @staticmethod
+    def _reserve_line(count: int) -> str:
+        n100 = count % 100
+        n10 = count % 10
+        if n100 in range(11, 15) or n10 == 0 or n10 >= 5:
+            return f"≈ запас на {count} коротких ответов"
+        if n10 == 1:
+            return f"≈ запас на {count} короткий ответ"
+        return f"≈ запас на {count} коротких ответа"
+
+    def _account_card_text(self, credits: int) -> str:
+        lines = [
+            "Счёт",
+            f"{credits} кр",
+            self._reserve_line(self._short_answers_left(credits)),
+        ]
+        if credits < self.settings.min_balance_to_talk:
+            lines.append("мало для нового запроса")
+        return "\n".join(lines)
+
+    async def _format_usage(self, telegram_id: int) -> str:
+        events = await self.repo.list_usage_events(telegram_id, 5)
+        if not events:
+            return "Пока нет запросов к модели."
+        lines = ["Последние запросы:"]
+        for ev in events:
+            tokens = ev["total_tokens"] or (
+                ev["prompt_tokens"] + ev["completion_tokens"]
+            )
+            lines.append(
+                f"{ev['created_at']} · {ev['model']} · {tokens} ток. · "
+                f"{ev['credits_charged']} кр. · {ev['status']}"
+            )
+        return "\n".join(lines)
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._touch_user(update)
         if update.message:
-            await update.message.reply_text(START_TEXT)
+            await update.message.reply_text(
+                START_TEXT,
+                reply_markup=main_reply_keyboard(),
+            )
 
     async def help_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._touch_user(update)
         if update.message:
-            await update.message.reply_text(HELP_TEXT)
+            await update.message.reply_text(
+                HELP_TEXT,
+                reply_markup=main_reply_keyboard(),
+            )
 
     async def reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
@@ -82,7 +137,10 @@ class BotHandlers:
             return
         await self.repo.upsert_user(user.id, user.username, user.first_name)
         await self.memory.reset(user.id)
-        await update.message.reply_text("История диалога очищена.")
+        await update.message.reply_text(
+            "История диалога очищена.",
+            reply_markup=main_reply_keyboard(),
+        )
 
     async def model_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._touch_user(update)
@@ -98,7 +156,8 @@ class BotHandlers:
         if not row:
             return
         await update.message.reply_text(
-            f"Баланс: {row.credits} кр.\nРегистрация: {row.created_at}"
+            self._account_card_text(row.credits),
+            reply_markup=account_inline_keyboard(),
         )
 
     async def usage_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -106,20 +165,60 @@ class BotHandlers:
         if not user or not update.message:
             return
         await self.repo.upsert_user(user.id, user.username, user.first_name)
-        events = await self.repo.list_usage_events(user.id, 5)
-        if not events:
-            await update.message.reply_text("Пока нет запросов к модели.")
+        await update.message.reply_text(
+            await self._format_usage(user.id),
+            reply_markup=main_reply_keyboard(),
+        )
+
+    async def topup_soon(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._touch_user(update)
+        if update.message:
+            await update.message.reply_text(
+                TOPUP_SOON_TEXT,
+                reply_markup=main_reply_keyboard(),
+            )
+
+    async def on_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        if not query or not query.data:
             return
-        lines = ["Последние запросы:"]
-        for ev in events:
-            tokens = ev["total_tokens"] or (
-                ev["prompt_tokens"] + ev["completion_tokens"]
-            )
-            lines.append(
-                f"{ev['created_at']} · {ev['model']} · {tokens} ток. · "
-                f"{ev['credits_charged']} кр. · {ev['status']}"
-            )
-        await update.message.reply_text("\n".join(lines))
+        await self._touch_user(update)
+        data = query.data
+        message = query.message
+
+        if data == CB_CLOSE:
+            await query.answer()
+            if message:
+                try:
+                    await message.delete()
+                except Exception:
+                    logger.exception("Failed to delete account card")
+            return
+
+        if data == CB_TOPUP:
+            await query.answer()
+            if message:
+                await message.reply_text(
+                    TOPUP_SOON_TEXT,
+                    reply_markup=main_reply_keyboard(),
+                )
+            return
+
+        if data == CB_USAGE:
+            await query.answer()
+            user = update.effective_user
+            if user and message:
+                await message.reply_text(
+                    await self._format_usage(user.id),
+                    reply_markup=main_reply_keyboard(),
+                )
+            return
+
+        await query.answer()
 
     async def grant_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         admin = update.effective_user
@@ -162,6 +261,15 @@ class BotHandlers:
 
         text = message.text.strip()
         if not text:
+            return
+
+        if text in REPLY_BUTTON_LABELS:
+            if text == BTN_BALANCE:
+                await self.balance_cmd(update, context)
+            elif text == BTN_NEW_CHAT:
+                await self.reset(update, context)
+            elif text == BTN_PACKAGES:
+                await self.topup_soon(update, context)
             return
 
         await self.repo.upsert_user(user.id, user.username, user.first_name)
